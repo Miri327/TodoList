@@ -1,8 +1,8 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /app
 
-COPY *.csproj .
-RUN dotnet restore
+COPY TodoApi.csproj .
+RUN dotnet restore TodoApi.csproj
 
 COPY . .
 RUN dotnet publish -c Release -o out
