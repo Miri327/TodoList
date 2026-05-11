@@ -3,10 +3,14 @@ using TodoApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// הוספת הגדרת CORS - מאפשר לכל אתר לגשת ל-API (שימושי לפיתוח)
+// תיקון עבור Render: מניעת קריסה בגלל מעקב אחרי קבצים
+builder.Configuration.Sources.OfType<Microsoft.Extensions.Configuration.Json.JsonConfigurationSource>()
+    .ToList().ForEach(source => source.ReloadOnChange = false);
+
+// הגדרת CORS - פעם אחת בלבד
 builder.Services.AddCors(options =>
 {
-    options.AddDefaultPolicy(policy =>
+    options.AddPolicy("AllowAll", policy =>
     {
         policy.AllowAnyOrigin()
               .AllowAnyMethod()
@@ -14,44 +18,39 @@ builder.Services.AddCors(options =>
     });
 });
 
-// רישום ה-DbContext
+// רישום ה-DbContext עם גרסה קבועה (חוסך חיבורים ומונע שגיאות ב-Render)
 var connectionString = builder.Configuration.GetConnectionString("ToDoDB");
-builder.Services.AddDbContext<ToDoDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+var serverVersion = new MySqlServerVersion(new Version(8, 0, 36)); // הגדרה ידנית
 
-// הוספת תמיכה ב-Swagger (כלים לתצוגה גרפית של ה-API)
+builder.Services.AddDbContext<ToDoDbContext>(options =>
+    options.UseMySql(connectionString, serverVersion));
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-// הגדרת פוליסי של CORS שמאפשר הכל
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowAll", policy =>
-    {
-        policy.AllowAnyOrigin()   // מאפשר מכל דומיין
-              .AllowAnyMethod()   // מאפשר את כל סוגי הפעולות (GET, POST, וכו')
-              .AllowAnyHeader();  // מאפשר את כל ה-Headers
-    });
-});
 
 var app = builder.Build();
 
-// הפעלת Swagger רק בסביבת פיתוח
+// יצירת הטבלאות באופן אוטומטי אם הן חסרות (פותר את שגיאת Table doesn't exist)
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ToDoDbContext>();
+    db.Database.EnsureCreated();
+}
+
+app.UseCors("AllowAll");
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
-// הפעלת ה-CORS עם השם שהגדרנו
-app.UseCors("AllowAll");
 
 app.MapGet("/", () => "ToDo API is running!");
 
-//---------------------------------Routes----------------------------
-
+// Routes
 app.MapGet("/items", async (ToDoDbContext db) =>
     await db.Items.ToListAsync());
 
-// שיניתי את הנתיב מ-addItem ל-/items כדי לשמור על אחידות (RESTful)
 app.MapPost("/items", async (ToDoDbContext db, Item newItem) =>
 {
     db.Items.Add(newItem);
@@ -64,10 +63,7 @@ app.MapPut("/items/{id}", async (ToDoDbContext db, int id, Item inputItem) =>
     var item = await db.Items.FindAsync(id);
     if (item is null) return Results.NotFound();
 
-    // עדכון הסטטוס תמיד
     item.IsComplete = inputItem.IsComplete;
-
-    // עדכון השם רק אם נשלח שם חדש ולא ריק
     if (!string.IsNullOrEmpty(inputItem.Name))
     {
         item.Name = inputItem.Name;
